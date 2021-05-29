@@ -121,6 +121,15 @@ class NotionExporter(_Connector):
 
         return Task(task_id, self._session)
 
+    def export_and_download(self, block_id):
+        url = self.export(block_id)
+
+        with requests.get(url, stream=True) as r:
+            r.raise_for_status()
+            with open("Export-%s.zip" % block_id, 'wb') as f:
+                for chunk in r.iter_content(chunk_size=65535):
+                    f.write(chunk)
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -136,6 +145,5 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-
     exporter = NotionExporter(args.token)
-    print(exporter.export(args.BLOCK_ID))
+    exporter.export_and_download(args.BLOCK_ID)
