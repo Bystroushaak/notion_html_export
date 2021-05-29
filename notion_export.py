@@ -136,6 +136,7 @@ if __name__ == '__main__':
     parser.add_argument(
         "-t",
         "--token",
+        required=True,
         help="`token_v2` value from cookies."
     )
     parser.add_argument(
