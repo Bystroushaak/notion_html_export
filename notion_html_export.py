@@ -20,6 +20,17 @@ class _Connector:
     def url_join(self, url):
         return self._base_url + url
 
+    def normalize_block_id(self, block_id):
+        without_dashes = "".join([x for x in block_id if x != "-"])
+        correctly_formatted = "%s-%s-%s-%s-%s" % (
+            without_dashes[0:8],
+            without_dashes[8:12],
+            without_dashes[12:16],
+            without_dashes[16:20],
+            without_dashes[20:],
+        )
+        return correctly_formatted
+
 
 class Task(_Connector):
     def __init__(self, task_id, session):
@@ -83,7 +94,18 @@ class NotionExporter(_Connector):
     def __init__(self, token_v2):
         super().__init__(token_v2)
 
+    def export_and_download(self, block_id):
+        block_id = self.normalize_block_id(block_id)
+        url = self.export(block_id)
+
+        with requests.get(url, stream=True) as r:
+            r.raise_for_status()
+            with open("Export-%s.zip" % block_id, 'wb') as f:
+                for chunk in r.iter_content(chunk_size=65535):
+                    f.write(chunk)
+
     def export(self, block_id, callback_fn=None):
+        block_id = self.normalize_block_id(block_id)
         task = self._enqueue_export_task(block_id)
 
         while True:
@@ -120,15 +142,6 @@ class NotionExporter(_Connector):
         task_id = result["taskId"]
 
         return Task(task_id, self._session)
-
-    def export_and_download(self, block_id):
-        url = self.export(block_id)
-
-        with requests.get(url, stream=True) as r:
-            r.raise_for_status()
-            with open("Export-%s.zip" % block_id, 'wb') as f:
-                for chunk in r.iter_content(chunk_size=65535):
-                    f.write(chunk)
 
 
 if __name__ == '__main__':
