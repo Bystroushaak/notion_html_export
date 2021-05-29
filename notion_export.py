@@ -1,6 +1,7 @@
 #! /usr/bin/env python3
 import time
 import argparse
+from tzlocal import get_localzone
 
 import requests
 
@@ -108,7 +109,7 @@ class NotionExporter(_Connector):
                              "recursive": True,
                              "exportOptions": {
                                  "exportType": "html",
-                                 "timeZone": "Europe/Prague",  # TODO: fix timezone
+                                 "timeZone": get_localzone().zone,
                                  "locale": "en"}}}}
 
         resp = self._session.post(self.url_join("/api/v3/enqueueTask"), json=data)
