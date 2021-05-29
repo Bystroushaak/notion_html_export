@@ -1,78 +1,140 @@
-import argparse
+#! /usr/bin/env python3
 import time
+import argparse
 
 import requests
 
 
-def export(block_id, callback_fn=None):
-    session = requests.Session()
-    session.headers[        "cookie"] = ""
+class _Connector:
+    def __init__(self, token_v2, session=None):
+        self._token_v2 = token_v2
+        self._base_url = "https://www.notion.so"
 
-    task_id = _enqueue_export_task(session, block_id)
+        if session:
+            self._session = session
+        else:
+            self._session = requests.Session()
+            self._session.headers["cookie"] = "token_v2=%s" % self._token_v2
 
-    while True:
-        result_dict, state = _get_task_status(session, task_id)
+    def url_join(self, url):
+        return self._base_url + url
 
-        if state == "in_progress":
-            time.sleep(5)
-            continue
 
-        elif state == "success":
-            result_url =
-            if callback_fn is not None:
-                callback_fn()
+class Task(_Connector):
+    def __init__(self, task_id, session):
+        super().__init__("", session)
+        self.task_id = task_id
+
+        self.status = "unknown"
+        self.result_dict = {}
+
+        self.failed = False
+        self.download_link = None
+        self.is_exported = False
+        self.in_progress = True
+
+    def update(self):
+        self.result_dict = self._download_task_status()
+        self.task_dict = self._filter_task_with_id(self.result_dict)
+        self.status = self.task_dict["state"].lower()
+
+        if self.status == "in_progress":
+            self.failed = False
+            self.in_progress = True
+            self.is_exported = False
+
+        elif self.status == "success":
+            self.failed = False
+            self.in_progress = False
+            self.is_exported = True
+
+            self.download_link = self.task_dict["status"]["exportURL"]
 
         else:
-            raise ValueError("Task wasn't successfully completed: %s" % result_dict)
+            self.failed = True
+            self.in_progress = False
+            self.is_exported = False
+
+    def _download_task_status(self):
+        resp = self._session.post(self.url_join("/api/v3/getTasks"),
+                                  json={"taskIds": [self.task_id]})
+
+        # {"results": [{"id": "XXXXX", "eventName": "exportBlock",
+        #               "request": {"blockId": "XXXXXX", "recursive": true,
+        #                           "exportOptions": {"exportType": "html", "timeZone": "Europe/Prague",
+        #                                             "locale": "en"}},
+        #               "actor": {"table": "notion_user", "id": "XXXXX"},
+        #               "state": "success", "rootRequest": {"eventName": "exportBlock",
+        #                                                   "requestId": "XXXXX"},
+        #               "status": {"type": "complete", "pagesExported": 1,
+        #                          "exportURL": "https://s3.us-west-2.amazonaws.com/..."}}]}
+        return resp.json()
+
+    def _filter_task_with_id(self, result_dict):
+        for task in result_dict["results"]:
+            if task["id"] == self.task_id:
+                return task
+
+        raise ValueError("Task not found in results.")
 
 
-def _get_task_status(session, task_id):
-    resp = session.post("https://www.notion.so/api/v3/getTasks",
-                        data={"taskIds": [task_id]})
+class NotionExporter(_Connector):
+    def __init__(self, token_v2):
+        super().__init__(token_v2)
 
-    # {"results": [{"id": "XXXXXXXX, "eventName": "exportBlock",
-    #               "request": {"blockId": "XXXXXXXXX", "recursive": true,
-    #                           "exportOptions": {"exportType": "html", "timeZone": "Europe/Prague",
-    #                                             "locale": "en"}},
-    #               "actor": {"table": "notion_user", "id": "XXXXXXX"},
-    #               "state": "in_progress", "rootRequest": {"eventName": "exportBlock",
-    #                                                       "requestId": "XXXXX"}}]}
-    result_dict = resp.json()
-    state = result_dict["results"][0]["state"]
+    def export(self, block_id, callback_fn=None):
+        task = self._enqueue_export_task(block_id)
 
-    return result_dict, state
+        while True:
+            task.update()
 
+            if task.in_progress:
+                time.sleep(5)
+                continue
 
-def _enqueue_export_task(session, block_id):
-    data = {"task": {"eventName": "exportBlock",
-                     "request": {
-                         "blockId": block_id,
-                         "recursive": True,
-                         "exportOptions": {
-                             "exportType": "html",
-                             "timeZone": "Europe/Prague",
-                             "locale": "en"}}}}
-    resp = session.post("https://notion.so/api/v3/enqueueTask", data=data)
+            if task.is_exported:
+                if callback_fn is not None:
+                    callback_fn(task.download_link)
 
-    # {"taskId":"XXXXXXX"}
-    result = resp.json()
-    task_id = result["taskId"]
+                return task.download_link
 
-    return task_id
+            else:
+                raise ValueError("Task wasn't successfully completed: %s" % task.result_dict)
 
+    def _enqueue_export_task(self, block_id: str) -> Task:
+        data = {"task": {"eventName": "exportBlock",
+                         "request": {
+                             "blockId": block_id,
+                             "recursive": True,
+                             "exportOptions": {
+                                 "exportType": "html",
+                                 "timeZone": "Europe/Prague",  # TODO: fix timezone
+                                 "locale": "en"}}}}
 
-def _parse_download_url(result_dict):
-    # {"results": [{"id": "XXXXX", "eventName": "exportBlock",
-    #               "request": {"blockId": "XXXXXX", "recursive": true,
-    #                           "exportOptions": {"exportType": "html", "timeZone": "Europe/Prague",
-    #                                             "locale": "en"}},
-    #               "actor": {"table": "notion_user", "id": "XXXXX"},
-    #               "state": "success", "rootRequest": {"eventName": "exportBlock",
-    #                                                   "requestId": "XXXXX"},
-    #               "status": {"type": "complete", "pagesExported": 1,
-    #                          "exportURL": "https://s3.us-west-2.amazonaws.com/..."}}]}
-    return result_dict["results"][0]["status"]["exportURL"]
+        resp = self._session.post(self.url_join("/api/v3/enqueueTask"), json=data)
+        resp.raise_for_status()
+
+        # {"taskId":"XXXXXXX"}
+        result = resp.json()
+        task_id = result["taskId"]
+
+        return Task(task_id, self._session)
 
 
 if __name__ == '__main__':
-    export(block_id="05d803fa-a527-4e3d-8581-51c25df951ed")
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "-t",
+        "--token",
+        help="`token_v2` value from cookies."
+    )
+    parser.add_argument(
+        "BLOCK_ID",
+        help="Id of the block you want to export."
+    )
+
+    args = parser.parse_args()
+
+
+    exporter = NotionExporter(args.token)
+    print(exporter.export(args.BLOCK_ID))
