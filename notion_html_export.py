@@ -1,9 +1,14 @@
 #! /usr/bin/env python3
+import sys
 import time
+import logging
 import argparse
 from tzlocal import get_localzone
 
+import tqdm
 import requests
+
+logger = logging.getLogger("notion_export")
 
 
 class _Connector:
@@ -33,7 +38,7 @@ class _Connector:
 
 
 class Task(_Connector):
-    def __init__(self, task_id, session):
+    def __init__(self, task_id, session, verbose=False):
         super().__init__("", session)
         self.task_id = task_id
 
@@ -55,12 +60,17 @@ class Task(_Connector):
             self.in_progress = True
             self.is_exported = False
 
+            if "status" in self.task_dict:
+                logger.info("Export in progress. Exported pages: %s", self.task_dict["status"]["pagesExported"])
+
         elif self.status == "success":
             self.failed = False
             self.in_progress = False
             self.is_exported = True
 
             self.download_link = self.task_dict["status"]["exportURL"]
+
+            logger.info("Exported finished, downloading now ..")
 
         else:
             self.failed = True
@@ -100,8 +110,10 @@ class NotionExporter(_Connector):
 
         with requests.get(url, stream=True) as r:
             r.raise_for_status()
+            chunk_size = 65535
+            download_len = int(r.headers["Content-Length"]) / chunk_size
             with open("Export-%s.zip" % block_id, 'wb') as f:
-                for chunk in r.iter_content(chunk_size=65535):
+                for chunk in tqdm.tqdm(r.iter_content(chunk_size=chunk_size), total=download_len):
                     f.write(chunk)
 
     def export(self, block_id, callback_fn=None):
@@ -141,6 +153,8 @@ class NotionExporter(_Connector):
         result = resp.json()
         task_id = result["taskId"]
 
+        logger.info("Task queued as `%s`.", task_id)
+
         return Task(task_id, self._session)
 
 
@@ -153,11 +167,25 @@ if __name__ == '__main__':
         help="`token_v2` value from cookies."
     )
     parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="Be verbose."
+    )
+    parser.add_argument(
         "BLOCK_ID",
         help="Id of the block you want to export."
     )
 
     args = parser.parse_args()
+
+    if args.verbose:
+        stderr_logger = logging.StreamHandler(sys.stderr)
+        log_fmt = ("\033[90m%(asctime)s %(levelname)s %(filename)s:%(lineno)s;\033[0m\n"
+                   "%(message)s\n")
+        stderr_logger.setFormatter(logging.Formatter(log_fmt))
+        logger.addHandler(stderr_logger)
+        logger.setLevel(logging.DEBUG)
 
     exporter = NotionExporter(args.token)
     exporter.export_and_download(args.BLOCK_ID)
