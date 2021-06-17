@@ -61,7 +61,10 @@ class Task(_Connector):
             self.is_exported = False
 
             if "status" in self.task_dict:
-                logger.info("Export in progress. Exported pages: %s", self.task_dict["status"]["pagesExported"])
+                logger.info(
+                    "Export in progress. Exported pages: %s",
+                    self.task_dict["status"]["pagesExported"],
+                )
 
         elif self.status == "success":
             self.failed = False
@@ -78,8 +81,9 @@ class Task(_Connector):
             self.is_exported = False
 
     def _download_task_status(self):
-        resp = self._session.post(self.url_join("/api/v3/getTasks"),
-                                  json={"taskIds": [self.task_id]})
+        resp = self._session.post(
+            self.url_join("/api/v3/getTasks"), json={"taskIds": [self.task_id]}
+        )
 
         # {"results": [{"id": "XXXXX", "eventName": "exportBlock",
         #               "request": {"blockId": "XXXXXX", "recursive": true,
@@ -110,11 +114,18 @@ class NotionExporter(_Connector):
 
         with requests.get(url, stream=True) as r:
             r.raise_for_status()
-            chunk_size = 65535
-            download_len = int(r.headers["Content-Length"]) / chunk_size
-            with open("Export-%s.zip" % block_id, 'wb') as f:
-                for chunk in tqdm.tqdm(r.iter_content(chunk_size=chunk_size), total=download_len):
+            download_len = int(r.headers["Content-Length"])
+
+            progress_bar = tqdm.tqdm(
+                r.iter_content(chunk_size=65535),
+                total=download_len,
+                unit="B",
+                unit_scale=True,
+            )
+            with open("Export-%s.zip" % block_id, "wb") as f:
+                for chunk in progress_bar:
                     f.write(chunk)
+                    progress_bar.update(len(chunk))
 
     def export(self, block_id, callback_fn=None):
         block_id = self.normalize_block_id(block_id)
@@ -134,17 +145,25 @@ class NotionExporter(_Connector):
                 return task.download_link
 
             else:
-                raise ValueError("Task wasn't successfully completed: %s" % task.result_dict)
+                raise ValueError(
+                    "Task wasn't successfully completed: %s" % task.result_dict
+                )
 
     def _enqueue_export_task(self, block_id: str) -> Task:
-        data = {"task": {"eventName": "exportBlock",
-                         "request": {
-                             "blockId": block_id,
-                             "recursive": True,
-                             "exportOptions": {
-                                 "exportType": "html",
-                                 "timeZone": get_localzone().zone,
-                                 "locale": "en"}}}}
+        data = {
+            "task": {
+                "eventName": "exportBlock",
+                "request": {
+                    "blockId": block_id,
+                    "recursive": True,
+                    "exportOptions": {
+                        "exportType": "html",
+                        "timeZone": get_localzone().zone,
+                        "locale": "en",
+                    },
+                },
+            }
+        }
 
         resp = self._session.post(self.url_join("/api/v3/enqueueTask"), json=data)
         resp.raise_for_status()
@@ -158,31 +177,22 @@ class NotionExporter(_Connector):
         return Task(task_id, self._session)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "-t",
-        "--token",
-        required=True,
-        help="`token_v2` value from cookies."
+        "-t", "--token", required=True, help="`token_v2` value from cookies."
     )
-    parser.add_argument(
-        "-v",
-        "--verbose",
-        action="store_true",
-        help="Be verbose."
-    )
-    parser.add_argument(
-        "BLOCK_ID",
-        help="Id of the block you want to export."
-    )
+    parser.add_argument("-v", "--verbose", action="store_true", help="Be verbose.")
+    parser.add_argument("BLOCK_ID", help="Id of the block you want to export.")
 
     args = parser.parse_args()
 
     if args.verbose:
         stderr_logger = logging.StreamHandler(sys.stderr)
-        log_fmt = ("\033[90m%(asctime)s %(levelname)s %(filename)s:%(lineno)s;\033[0m\n"
-                   "%(message)s\n")
+        log_fmt = (
+            "\033[90m%(asctime)s %(levelname)s %(filename)s:%(lineno)s;\033[0m\n"
+            "%(message)s\n"
+        )
         stderr_logger.setFormatter(logging.Formatter(log_fmt))
         logger.addHandler(stderr_logger)
         logger.setLevel(logging.DEBUG)
